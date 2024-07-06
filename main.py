@@ -3,7 +3,7 @@ import argparse
 import sys, os
 import pdfplumber
 import re
-from pandas import DataFrame
+from pandas import DataFrame, to_datetime
 from datetime import datetime
 import scipy.optimize
 
@@ -45,25 +45,25 @@ class WelcomeScreen():
                     "Nav",
                     "Total_cost_value",
                     "Market_value",
+                    "Xirr"
                 ]
         }
-
 
     def file_processing(self, file_path, doc_pwd):
         final_text = ""
 
         if not len(file_path) == 0:
-            try:
-                with pdfplumber.open(file_path, password=doc_pwd) as pdf:
-                    for i in range(len(pdf.pages)):
-                        txt = pdf.pages[i].extract_text()
-                        final_text = final_text + "\n" + txt
-                    pdf.close()
-                print("EXTRACTING")
-                self.extract_text(final_text)
+            # try:
+            with pdfplumber.open(file_path, password=doc_pwd) as pdf:
+                for i in range(len(pdf.pages)):
+                    txt = pdf.pages[i].extract_text()
+                    final_text = final_text + "\n" + txt
+                pdf.close()
+            print("EXTRACTING")
+            self.extract_text(final_text)
 
-            except Exception as e:
-                print("Error in reading file: ", e , "\n")
+            # except Exception as e:
+            #     print("Error in reading file: ", e , "\n")
         else:
             print("Please select your CAMS PDF file..\n")
 
@@ -112,11 +112,10 @@ class WelcomeScreen():
             market_val = summary_items.group(12)
             self.rows_map[SUMMARY].append(
                 [
-                    folio, fund, date, closing_units, nav, cost, market_val,
+                    folio, fund, date, closing_units, nav,
+                    cost, market_val, 0.00
                 ]
             )
-        
-        
 
     def write_to_op_file(self, op_type):
         date_str = datetime.now().strftime("%d_%m_%Y_%H_%M")
@@ -146,6 +145,11 @@ class WelcomeScreen():
             df.Closing_unit_balance = df.Closing_unit_balance.astype("float")
             df.Total_cost_value = df.Total_cost_value.astype("float")
             df.Market_value = df.Market_value.astype("float")
+            self.sumarry_df = df
+            # Compute XIRR
+            xirrs = self.compute_xirrs()
+            df['Xirr'] = xirrs
+
         else:
             sys.stderr.write("Unkown type: " + str(op_type))
         
@@ -165,6 +169,32 @@ class WelcomeScreen():
         x.replace(r"\)", " ", regex=True, inplace=True)
         return x
 
+    def compute_xirrs(self):
+        count = 0
+        xirrs = []
+        for fund in self.sumarry_df.Fund_name:
+            fund_txns = self.txn_df.loc[
+                            self.txn_df["Fund_name"] == fund
+                        ]
+            fund_summ = self.sumarry_df.loc[
+                            self.sumarry_df["Fund_name"] == fund
+                        ]
+            # For XIRR calcs, include the current date/val
+            # Add to the txns, the current date
+            final_date = to_datetime(fund_summ["Date"])[count]
+            dates = to_datetime(fund_txns["Date"]).tolist()
+            dates.append(final_date)
+            # Add to the txns, the current market val
+            final_amt = fund_summ["Market_value"].tolist()
+            txns = fund_txns["Amount"].tolist()
+            txns.append(0-final_amt[0])
+            
+            xirr_val = xirr(txns,dates)
+            xirrs.append(round(xirr_val*100, 2))
+            count += 1
+    
+        return xirrs
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -175,6 +205,7 @@ def parse_args():
                         help="Password of the input PDF file")
     return parser.parse_args()
 
+# Thanks to KT. for XIRR computation fns : https://stackoverflow.com/a/33260133
 def xnpv(rate, values, dates):
     '''Equivalent of Excel's XNPV function.
 
