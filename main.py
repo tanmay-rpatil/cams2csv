@@ -4,6 +4,7 @@ import sys, os
 import pdfplumber
 import re
 from pandas import DataFrame, to_datetime
+import numpy as np
 from datetime import datetime
 import scipy.optimize
 
@@ -72,10 +73,13 @@ class WelcomeScreen():
         folio_pat = re.compile(
             r"(^Folio No:\s\d+)", flags=re.IGNORECASE)  # Extracting Folio information
         fund_name = re.compile(r".*[Fund].*ISIN.*", flags=re.IGNORECASE)
-
+        fund_txns = 0
+        total_txn = 0
         for i in doc_txt.splitlines():
+            
             if fund_name.match(i):
                 fun_name = i
+                fund_txns = 0
 
             if folio_pat.match(i):
                 folio = i
@@ -94,9 +98,25 @@ class WelcomeScreen():
                         units, price, unit_bal
                     ]
                 )
+                fund_txns += 1
+                total_txn += 1
             elif i.startswith("Closing"):
                 self.summerize_current_fund(fun_name,folio,i)
-
+            elif "*** Stamp Duty ***" in i:
+                line = ((i.strip()).split())
+                duty = line[-1]
+                date = line[0]
+                description = line[1]
+                print(duty,date,description)
+                # self.rows_map[ALL_TXN].append(
+                #     [
+                #         folio, fun_name, date, description, duty,
+                #         '0', '0', '0'
+                #     ]
+                # )
+                
+            
+               
         self.txn_df = self.write_to_op_file(ALL_TXN)
         # xirr
 
@@ -182,7 +202,9 @@ class WelcomeScreen():
             # For XIRR calcs, include the current date/val
             # Add to the txns, the current date
             final_date = to_datetime(fund_summ["Date"])[count]
-            dates = to_datetime(fund_txns["Date"]).tolist()
+            dates = to_datetime(fund_txns["Date"],
+                                format="%d-%b-%Y",
+                                dayfirst=True).tolist()
             dates.append(final_date)
             # Add to the txns, the current market val
             final_amt = fund_summ["Market_value"].tolist()
