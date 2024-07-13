@@ -5,7 +5,7 @@ import pdfplumber
 import re
 from pandas import DataFrame, to_datetime
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import scipy.optimize
 
 basedir = os.path.dirname(__file__)
@@ -46,7 +46,8 @@ class WelcomeScreen():
                     "Nav",
                     "Total_cost_value",
                     "Market_value",
-                    "Xirr"
+                    "Xirr",
+                    "Age"
                 ]
         }
 
@@ -82,7 +83,7 @@ class WelcomeScreen():
                 fund_txns = 0
 
             if folio_pat.match(i):
-                folio = i
+                folio = i.strip()
 
             txt = TXN_REGEX.search(i)
             if txt:
@@ -106,14 +107,13 @@ class WelcomeScreen():
                 line = ((i.strip()).split())
                 duty = line[-1]
                 date = line[0]
-                description = line[1]
-                print(duty,date,description)
-                # self.rows_map[ALL_TXN].append(
-                #     [
-                #         folio, fun_name, date, description, duty,
-                #         '0', '0', '0'
-                #     ]
-                # )
+                description = "Stamp Duty"
+                self.rows_map[ALL_TXN].append(
+                    [
+                        folio, fun_name, date, description, duty,
+                        '0', '0', '0'
+                    ]
+                )
                 
             
                
@@ -121,7 +121,7 @@ class WelcomeScreen():
         # xirr
 
         self.write_to_op_file(SUMMARY)  
-        
+
     def summerize_current_fund(self, fund, folio, summary: str):
         summary_items = SUMMARY_REGEX.search(summary)
         if summary_items:
@@ -133,7 +133,7 @@ class WelcomeScreen():
             self.rows_map[SUMMARY].append(
                 [
                     folio, fund, date, closing_units, nav,
-                    cost, market_val, 0.00
+                    cost, market_val, 0.00, 0
                 ]
             )
 
@@ -143,7 +143,6 @@ class WelcomeScreen():
         save_file = os.path.join(".",op_type +"-"+ fname_tmpl +".csv")
 
         rows = self.rows_map[op_type]
-        print((len(rows),len(self.headers[op_type])))
         df = DataFrame (rows,columns=self.headers[op_type])
         if op_type == ALL_TXN:
             self.clean_txt(df.Amount)
@@ -167,9 +166,9 @@ class WelcomeScreen():
             df.Market_value = df.Market_value.astype("float")
             self.sumarry_df = df
             # Compute XIRR
-            xirrs = self.compute_xirrs()
+            xirrs,ages = self.compute_xirrs_ages()
             df['Xirr'] = xirrs
-
+            df['Age'] = ages
         else:
             sys.stderr.write("Unkown type: " + str(op_type))
         
@@ -189,9 +188,28 @@ class WelcomeScreen():
         x.replace(r"\)", " ", regex=True, inplace=True)
         return x
 
-    def compute_xirrs(self):
+    def calculate_fund_age_days(self,fund_summ,idx, dates, txns):
+        closing_bal = float(fund_summ["Closing_unit_balance"][idx])
+        if closing_bal < 0.01:
+            closing_bal = 0
+        
+        if len(dates) == len(txns) == 1:
+            # only summary available
+            return timedelta().days
+        elif len(dates) == len(txns) and len(dates) > 1:
+            # atleast 1 txn and summary available
+            if closing_bal != 0:
+                age = (dates[-1]-dates[0]).days
+            else:
+                age = (dates[-2]-dates[0]).days
+            return age
+        else:
+            return timedelta().days
+   
+    def compute_xirrs_ages(self):
         count = 0
         xirrs = []
+        ages = []
         for fund in self.sumarry_df.Fund_name:
             fund_txns = self.txn_df.loc[
                             self.txn_df["Fund_name"] == fund
@@ -201,7 +219,8 @@ class WelcomeScreen():
                         ]
             # For XIRR calcs, include the current date/val
             # Add to the txns, the current date
-            final_date = to_datetime(fund_summ["Date"])[count]
+            #since this is a view on a df, we use count as the correct idx in the overal df
+            final_date = to_datetime(fund_summ["Date"])[count] 
             dates = to_datetime(fund_txns["Date"],
                                 format="%d-%b-%Y",
                                 dayfirst=True).tolist()
@@ -211,11 +230,16 @@ class WelcomeScreen():
             txns = fund_txns["Amount"].tolist()
             txns.append(0-final_amt[0])
             
-            xirr_val = xirr(txns,dates)
+            # Cost value to compute absolute gain
+            cost_value = fund_summ["Total_cost_value"].tolist()[0]
+
+            age = self.calculate_fund_age_days(fund_summ,count,dates,txns)
+            ages.append(age)
+            xirr_val = xirr(txns,dates,age,cost_value,final_amt[0])
             xirrs.append(round(xirr_val*100, 2))
             count += 1
     
-        return xirrs
+        return xirrs,ages
 
 
 def parse_args():
@@ -241,8 +265,8 @@ def xnpv(rate, values, dates):
         return float('inf')
     d0 = dates[0]    # or min(dates)
     return sum([ vi / (1.0 + rate)**((di - d0).days / 365.0) for vi, di in zip(values, dates)])
-
-def xirr(values, dates):
+# returns the xirr ratio, not %age
+def xirr(values, dates,days, cost_value, final_amt):
     '''Equivalent of Excel's XIRR function.
 
     >>> from datetime import date
@@ -251,6 +275,9 @@ def xirr(values, dates):
     >>> xirr(values, dates)
     0.0100612...
     '''
+    if days<365:
+        return ((final_amt-cost_value)/cost_value)
+
     try:
         return scipy.optimize.newton(lambda r: xnpv(r, values, dates), 0.0)
     except RuntimeError:    # Failed to converge?
