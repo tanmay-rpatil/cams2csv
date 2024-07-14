@@ -166,9 +166,12 @@ class WelcomeScreen():
             df.Market_value = df.Market_value.astype("float")
             self.sumarry_df = df
             # Compute XIRR
-            xirrs,ages = self.compute_xirrs_ages()
+            xirrs,ages = self.compute_fund_xirrs_ages()
             df['Xirr'] = xirrs
             df['Age'] = ages
+            # Overall summary
+            summary = self.overll_summary()
+            df.loc[len(df)] = summary
         else:
             sys.stderr.write("Unkown type: " + str(op_type))
         
@@ -181,6 +184,40 @@ class WelcomeScreen():
             sys.stderr.write(str(e))
 
         return df 
+    
+    def overll_summary(self):
+        self.txn_df["Date"] = to_datetime(self.txn_df["Date"],
+                                            format="%d-%b-%Y",
+                                            dayfirst=True)
+        sorted_df = self.txn_df.sort_values(by="Date")
+        # First txn date
+        closing_dates = to_datetime(self.sumarry_df["Date"],
+                                            format="%d-%b-%Y",
+                                            dayfirst=True).tolist()
+        closing_date = sorted(closing_dates)[-1]
+        closing_bal = self.sumarry_df["Closing_unit_balance"].sum()
+        sorted_dates = sorted_df["Date"].tolist()
+        sorted_dates.append(closing_date)
+
+        sorted_txns = sorted_df["Amount"].tolist()
+        total_value = self.sumarry_df["Market_value"].sum()
+        sorted_txns.append(0-total_value)
+        total_age = self.calculate_fund_age_days(closing_bal,sorted_dates,
+                                                 sorted_txns)
+
+        total_invested = self.sumarry_df["Total_cost_value"].sum()
+
+        net_xirr = xirr(sorted_txns,sorted_dates,total_age,
+                        total_invested,total_value) 
+        net_xirr = net_xirr*100
+
+        summary_line = [
+            "Total", "Summary",closing_date.strftime('%d-%B-%y'),closing_bal,
+            (total_value)/closing_bal,total_invested,total_value,net_xirr,total_age
+        ]
+        print(summary_line)
+        return summary_line
+               
 
     def clean_txt(self, x):
         x.replace(r",", "", regex=True, inplace=True)
@@ -188,8 +225,7 @@ class WelcomeScreen():
         x.replace(r"\)", " ", regex=True, inplace=True)
         return x
 
-    def calculate_fund_age_days(self,fund_summ,idx, dates, txns):
-        closing_bal = float(fund_summ["Closing_unit_balance"][idx])
+    def calculate_fund_age_days(self,closing_bal, dates, txns):
         if closing_bal < 0.01:
             closing_bal = 0
         
@@ -206,7 +242,7 @@ class WelcomeScreen():
         else:
             return timedelta().days
    
-    def compute_xirrs_ages(self):
+    def compute_fund_xirrs_ages(self):
         count = 0
         xirrs = []
         ages = []
@@ -232,8 +268,8 @@ class WelcomeScreen():
             
             # Cost value to compute absolute gain
             cost_value = fund_summ["Total_cost_value"].tolist()[0]
-
-            age = self.calculate_fund_age_days(fund_summ,count,dates,txns)
+            closing_bal = float(fund_summ["Closing_unit_balance"][count])
+            age = self.calculate_fund_age_days(closing_bal,dates,txns)
             ages.append(age)
             xirr_val = xirr(txns,dates,age,cost_value,final_amt[0])
             xirrs.append(round(xirr_val*100, 2))
@@ -276,6 +312,8 @@ def xirr(values, dates,days, cost_value, final_amt):
     0.0100612...
     '''
     if days<365:
+        if cost_value == 0:
+            return 0
         return ((final_amt-cost_value)/cost_value)
 
     try:
