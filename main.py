@@ -202,7 +202,7 @@ class WelcomeScreen():
         sorted_txns = sorted_df["Amount"].tolist()
         total_value = self.sumarry_df["Market_value"].sum()
         sorted_txns.append(0-total_value)
-        total_age = self.calculate_fund_age_days(closing_bal,sorted_dates,
+        total_age,closing_date = self.calculate_fund_age_days_and_closing_date(closing_bal,sorted_dates,
                                                  sorted_txns)
 
         total_invested = self.sumarry_df["Total_cost_value"].sum()
@@ -225,38 +225,46 @@ class WelcomeScreen():
         x.replace(r"\)", " ", regex=True, inplace=True)
         return x
 
-    def calculate_fund_age_days(self,closing_bal, dates, txns):
+    def calculate_fund_age_days_and_closing_date(self,closing_bal, dates, txns):
         if closing_bal < 0.01:
             closing_bal = 0
         
         if len(dates) == len(txns) == 1:
             # only summary available
-            return timedelta().days
+            return timedelta().days,dates[0]
         elif len(dates) == len(txns) and len(dates) > 1:
             # atleast 1 txn and summary available
             if closing_bal != 0:
+                # age does includes summary date
                 age = (dates[-1]-dates[0]).days
+                closing = dates[-1]
             else:
+                # age does not include summary date
                 age = (dates[-2]-dates[0]).days
-            return age
+                closing = dates[-2]
+            return age, closing
         else:
-            return timedelta().days
+            return timedelta().days, datetime.time(0)
    
     def compute_fund_xirrs_ages(self):
         count = 0
         xirrs = []
         ages = []
-        for fund in self.sumarry_df.Fund_name:
+        for (fund,folio)in zip(self.sumarry_df.Fund_name,
+                                self.sumarry_df.Folio):
             fund_txns = self.txn_df.loc[
-                            self.txn_df["Fund_name"] == fund
+                            (self.txn_df["Fund_name"] == fund) & 
+                            (self.txn_df["Folio"] == folio)
                         ]
             fund_summ = self.sumarry_df.loc[
-                            self.sumarry_df["Fund_name"] == fund
+                            (self.sumarry_df["Fund_name"] == fund) & 
+                            (self.sumarry_df["Folio"] == folio)
                         ]
             # For XIRR calcs, include the current date/val
             # Add to the txns, the current date
             #since this is a view on a df, we use count as the correct idx in the overal df
-            final_date = to_datetime(fund_summ["Date"])[count] 
+            final_date = to_datetime(fund_summ["Date"], format="%d-%b-%Y",
+                                dayfirst=True)[count] 
             dates = to_datetime(fund_txns["Date"],
                                 format="%d-%b-%Y",
                                 dayfirst=True).tolist()
@@ -269,7 +277,9 @@ class WelcomeScreen():
             # Cost value to compute absolute gain
             cost_value = fund_summ["Total_cost_value"].tolist()[0]
             closing_bal = float(fund_summ["Closing_unit_balance"][count])
-            age = self.calculate_fund_age_days(closing_bal,dates,txns)
+            age, closing_date = self.calculate_fund_age_days_and_closing_date(closing_bal,dates,txns)
+            self.sumarry_df.at[count,"Date"] = closing_date.strftime('%d-%b-%Y')
+            print(fund_summ["Date"][count], closing_date.strftime('%d-%b-%Y'))
             ages.append(age)
             xirr_val = xirr(txns,dates,age,cost_value,final_amt[0])
             xirrs.append(round(xirr_val*100, 2))
