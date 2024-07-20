@@ -98,6 +98,10 @@ class WelcomeScreen():
                 units = txt.group(4)
                 price = txt.group(5)
                 unit_bal = txt.group(6)
+                # In cases of IDCW Re-investment, ignore the amt and add it 
+                # to description
+                description,amount = self.handle_idcw_reinvest_if_reqd(description,amount)
+
                 self.rows_map[ALL_TXN].append(
                     [
                         folio, fun_name, date, description, amount,
@@ -107,43 +111,42 @@ class WelcomeScreen():
                 fund_txns += 1
                 total_txn += 1
             elif no_unit_txn:
+                # TXNS where units dont change
                 date = no_unit_txn.group(1)
                 description = no_unit_txn.group(2)
                 amount = no_unit_txn.group(3)
                 if "Stamp Duty" in description:
-                    print("\nSTMP:", [folio, fun_name, date, description, amount,'0', '0', '0'],"\n****\n")
                     self.rows_map[ALL_TXN].append(
                         [
                             folio, fun_name, date, description, amount,
                             '0', '0', '0'
                         ]
                     )
-                elif "IDCW Payout" in description:
+                elif ("IDCW" in description) and ("per unit" in description):
                     if '(' not in amount: 
                         amount = '('+amount+')'
-                    print("\nIDCW:", [folio, fun_name, date, description, amount,'0', '0', '0'],"\n****\n")
-                    self.rows_map[ALL_TXN].append(
-                        [
+                    row = [
                             folio, fun_name, date, description, amount,
                             '0', '0', '0'
                         ]
+                    print(row,"\n")
+                    self.rows_map[ALL_TXN].append(
+                        row
                     )
 
             elif i.startswith("Closing"):
                 self.summerize_current_fund(fun_name,folio,i)
-            elif "***  ***" in i:
-                line = ((i.strip()).split())
-                duty = line[-1]
-                date = line[0]
-                description = "Stamp Duty"
-                
-                
-            
                
         self.txn_df = self.write_to_op_file(ALL_TXN)
         # xirr
 
         self.write_to_op_file(SUMMARY)  
+    
+    def handle_idcw_reinvest_if_reqd(self,description,amt):
+        if "IDCW Reinvested" in description:
+            description += (" - RS: "+amt)
+            amt = "0"
+        return description,amt
 
     def summerize_current_fund(self, fund, folio, summary: str):
         summary_items = SUMMARY_REGEX.search(summary)
