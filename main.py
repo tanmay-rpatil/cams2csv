@@ -18,6 +18,10 @@ SUMMARY_REGEX = re.compile (
 TXN_REGEX = re.compile(
                 r"(^\d{2}-\w{3}-\d{4})(\s.+?\s(?=[\d(]))([\d\(]+[,.]\d+[.\d\)]+)(\s[\d\(\,\.\)]+)(\s[\d\,\.]+)(\s[\d,\.]+)"
             )
+# TXN with only amount, but units do not change
+NON_UNITS_TXN = re.compile (
+                r"(^\d{2}-\w{3}-\d{4})(\s.+?\s(?=[\d(]))([\d\(]+[,.]\d+[.\d\)]+)"
+            )
 
 class WelcomeScreen():
     def __init__(self):
@@ -86,6 +90,7 @@ class WelcomeScreen():
                 folio = i.strip()
 
             txt = TXN_REGEX.search(i)
+            no_unit_txn = NON_UNITS_TXN.search(i)
             if txt:
                 date = txt.group(1)
                 description = txt.group(2)
@@ -101,19 +106,37 @@ class WelcomeScreen():
                 )
                 fund_txns += 1
                 total_txn += 1
+            elif no_unit_txn:
+                date = no_unit_txn.group(1)
+                description = no_unit_txn.group(2)
+                amount = no_unit_txn.group(3)
+                if "Stamp Duty" in description:
+                    print("\nSTMP:", [folio, fun_name, date, description, amount,'0', '0', '0'],"\n****\n")
+                    self.rows_map[ALL_TXN].append(
+                        [
+                            folio, fun_name, date, description, amount,
+                            '0', '0', '0'
+                        ]
+                    )
+                elif "IDCW Payout" in description:
+                    if '(' not in amount: 
+                        amount = '('+amount+')'
+                    print("\nIDCW:", [folio, fun_name, date, description, amount,'0', '0', '0'],"\n****\n")
+                    self.rows_map[ALL_TXN].append(
+                        [
+                            folio, fun_name, date, description, amount,
+                            '0', '0', '0'
+                        ]
+                    )
+
             elif i.startswith("Closing"):
                 self.summerize_current_fund(fun_name,folio,i)
-            elif "*** Stamp Duty ***" in i:
+            elif "***  ***" in i:
                 line = ((i.strip()).split())
                 duty = line[-1]
                 date = line[0]
                 description = "Stamp Duty"
-                self.rows_map[ALL_TXN].append(
-                    [
-                        folio, fun_name, date, description, duty,
-                        '0', '0', '0'
-                    ]
-                )
+                
                 
             
                
