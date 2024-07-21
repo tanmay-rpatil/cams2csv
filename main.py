@@ -18,6 +18,10 @@ SUMMARY_REGEX = re.compile (
 TXN_REGEX = re.compile(
                 r"(^\d{2}-\w{3}-\d{4})(\s.+?\s(?=[\d(]))([\d\(]+[,.]\d+[.\d\)]+)(\s[\d\(\,\.\)]+)(\s[\d\,\.]+)(\s[\d,\.]+)"
             )
+# TXN with only amount, but units do not change
+NON_UNITS_TXN = re.compile (
+                r"(^\d{2}-\w{3}-\d{4})(\s.+?\s(?=[\d(]))([\d\(]+[,.]\d+[.\d\)]+)"
+            )
 
 class WelcomeScreen():
     def __init__(self):
@@ -47,6 +51,7 @@ class WelcomeScreen():
                     "Total_cost_value",
                     "Market_value",
                     "Xirr",
+                    "Returns",
                     "Age"
                 ]
         }
@@ -86,6 +91,7 @@ class WelcomeScreen():
                 folio = i.strip()
 
             txt = TXN_REGEX.search(i)
+            no_unit_txn = NON_UNITS_TXN.search(i)
             if txt:
                 date = txt.group(1)
                 description = txt.group(2)
@@ -93,6 +99,10 @@ class WelcomeScreen():
                 units = txt.group(4)
                 price = txt.group(5)
                 unit_bal = txt.group(6)
+                # In cases of IDCW Re-investment, ignore the amt and add it 
+                # to description
+                description,amount = self.handle_idcw_reinvest_if_reqd(description,amount)
+
                 self.rows_map[ALL_TXN].append(
                     [
                         folio, fun_name, date, description, amount,
@@ -101,26 +111,43 @@ class WelcomeScreen():
                 )
                 fund_txns += 1
                 total_txn += 1
+            elif no_unit_txn:
+                # TXNS where units dont change
+                date = no_unit_txn.group(1)
+                description = no_unit_txn.group(2)
+                amount = no_unit_txn.group(3)
+                if "Stamp Duty" in description:
+                    self.rows_map[ALL_TXN].append(
+                        [
+                            folio, fun_name, date, description, amount,
+                            '0', '0', '0'
+                        ]
+                    )
+                elif ("IDCW" in description) and ("per unit" in description):
+                    if '(' not in amount: 
+                        amount = '('+amount+')'
+                    row = [
+                            folio, fun_name, date, description, amount,
+                            '0', '0', '0'
+                        ]
+                    print(row,"\n")
+                    self.rows_map[ALL_TXN].append(
+                        row
+                    )
+
             elif i.startswith("Closing"):
                 self.summerize_current_fund(fun_name,folio,i)
-            elif "*** Stamp Duty ***" in i:
-                line = ((i.strip()).split())
-                duty = line[-1]
-                date = line[0]
-                description = "Stamp Duty"
-                self.rows_map[ALL_TXN].append(
-                    [
-                        folio, fun_name, date, description, duty,
-                        '0', '0', '0'
-                    ]
-                )
-                
-            
                
         self.txn_df = self.write_to_op_file(ALL_TXN)
         # xirr
 
         self.write_to_op_file(SUMMARY)  
+    
+    def handle_idcw_reinvest_if_reqd(self,description,amt):
+        if "IDCW Reinvested" in description:
+            description += (" - RS: "+amt)
+            amt = "0"
+        return description,amt
 
     def summerize_current_fund(self, fund, folio, summary: str):
         summary_items = SUMMARY_REGEX.search(summary)
@@ -133,7 +160,7 @@ class WelcomeScreen():
             self.rows_map[SUMMARY].append(
                 [
                     folio, fund, date, closing_units, nav,
-                    cost, market_val, 0.00, 0
+                    cost, market_val, 0.00, 0.00, 0
                 ]
             )
 
@@ -165,13 +192,15 @@ class WelcomeScreen():
             df.Total_cost_value = df.Total_cost_value.astype("float")
             df.Market_value = df.Market_value.astype("float")
             self.sumarry_df = df
-            # Compute XIRR
-            xirrs,ages = self.compute_fund_xirrs_ages()
+            # Compute returns and age
+            xirrs,ages,returns = self.compute_fund_xirrs_ages_returns()
             df['Xirr'] = xirrs
             df['Age'] = ages
+            df['Returns'] = returns
             # Overall summary
             summary = self.overll_summary()
             df.loc[len(df)] = summary
+            df['Age'] = df['Age'].apply(lambda x: self.fmt_age_days_to_yrs(x))
         else:
             sys.stderr.write("Unkown type: " + str(op_type))
         
@@ -202,7 +231,7 @@ class WelcomeScreen():
         sorted_txns = sorted_df["Amount"].tolist()
         total_value = self.sumarry_df["Market_value"].sum()
         sorted_txns.append(0-total_value)
-        total_age = self.calculate_fund_age_days(closing_bal,sorted_dates,
+        total_age,closing_date = self.calculate_fund_age_days_and_closing_date(closing_bal,sorted_dates,
                                                  sorted_txns)
 
         total_invested = self.sumarry_df["Total_cost_value"].sum()
@@ -211,13 +240,23 @@ class WelcomeScreen():
                         total_invested,total_value) 
         net_xirr = net_xirr*100
 
+        total_returns = absolute_returns(total_invested,total_value)
+        total_returns = round(total_returns,2)
+        total_value = round(total_value,2)
+        net_xirr = round(net_xirr,2)
+        total_invested = round(total_invested,2)
+        closing_bal = round(closing_bal,2)
         summary_line = [
             "Total", "Summary",closing_date.strftime('%d-%B-%y'),closing_bal,
-            (total_value)/closing_bal,total_invested,total_value,net_xirr,total_age
+            round((total_value)/closing_bal,2),total_invested,total_value,
+            net_xirr,total_returns, total_age
         ]
-        print(summary_line)
+
         return summary_line
                
+    def fmt_age_days_to_yrs(self, age_in_days: int)->float:
+        return round((age_in_days/365.25),2)
+
 
     def clean_txt(self, x):
         x.replace(r",", "", regex=True, inplace=True)
@@ -225,57 +264,72 @@ class WelcomeScreen():
         x.replace(r"\)", " ", regex=True, inplace=True)
         return x
 
-    def calculate_fund_age_days(self,closing_bal, dates, txns):
+    def calculate_fund_age_days_and_closing_date(self,closing_bal, dates, txns):
         if closing_bal < 0.01:
             closing_bal = 0
         
         if len(dates) == len(txns) == 1:
             # only summary available
-            return timedelta().days
+            return timedelta().days,dates[0]
         elif len(dates) == len(txns) and len(dates) > 1:
             # atleast 1 txn and summary available
             if closing_bal != 0:
+                # age does includes summary date
                 age = (dates[-1]-dates[0]).days
+                closing = dates[-1]
             else:
+                # age does not include summary date
                 age = (dates[-2]-dates[0]).days
-            return age
+                closing = dates[-2]
+            return age, closing
         else:
-            return timedelta().days
+            return timedelta().days, datetime.time(0)
    
-    def compute_fund_xirrs_ages(self):
+    def compute_fund_xirrs_ages_returns(self):
         count = 0
         xirrs = []
         ages = []
-        for fund in self.sumarry_df.Fund_name:
+        all_fund_returns = []
+        for (fund,folio)in zip(self.sumarry_df.Fund_name,
+                                self.sumarry_df.Folio):
             fund_txns = self.txn_df.loc[
-                            self.txn_df["Fund_name"] == fund
+                            (self.txn_df["Fund_name"] == fund) & 
+                            (self.txn_df["Folio"] == folio)
                         ]
             fund_summ = self.sumarry_df.loc[
-                            self.sumarry_df["Fund_name"] == fund
+                            (self.sumarry_df["Fund_name"] == fund) & 
+                            (self.sumarry_df["Folio"] == folio)
                         ]
             # For XIRR calcs, include the current date/val
             # Add to the txns, the current date
             #since this is a view on a df, we use count as the correct idx in the overal df
-            final_date = to_datetime(fund_summ["Date"])[count] 
+            final_date = to_datetime(fund_summ["Date"], format="%d-%b-%Y",
+                                dayfirst=True)[count] 
             dates = to_datetime(fund_txns["Date"],
                                 format="%d-%b-%Y",
                                 dayfirst=True).tolist()
             dates.append(final_date)
             # Add to the txns, the current market val
-            final_amt = fund_summ["Market_value"].tolist()
+            final_amt = (fund_summ["Market_value"].tolist())[0]
             txns = fund_txns["Amount"].tolist()
-            txns.append(0-final_amt[0])
+            txns.append(0-final_amt)
             
             # Cost value to compute absolute gain
             cost_value = fund_summ["Total_cost_value"].tolist()[0]
             closing_bal = float(fund_summ["Closing_unit_balance"][count])
-            age = self.calculate_fund_age_days(closing_bal,dates,txns)
+            age, closing_date = self.calculate_fund_age_days_and_closing_date(closing_bal,dates,txns)
+            self.sumarry_df.at[count,"Date"] = closing_date.strftime('%d-%b-%Y')
+            print(fund_summ["Date"][count], closing_date.strftime('%d-%b-%Y'))
             ages.append(age)
-            xirr_val = xirr(txns,dates,age,cost_value,final_amt[0])
+            xirr_val = xirr(txns,dates,age,cost_value,final_amt)
             xirrs.append(round(xirr_val*100, 2))
             count += 1
+
+            # Abs returns
+            fund_returns = absolute_returns(cost_value,final_amt)
+            all_fund_returns.append(round(fund_returns, 2))
     
-        return xirrs,ages
+        return xirrs,ages,all_fund_returns
 
 
 def parse_args():
@@ -286,6 +340,12 @@ def parse_args():
     parser.add_argument( '-p', '--password', default="",
                         help="Password of the input PDF file")
     return parser.parse_args()
+
+# Absolute returns 
+def absolute_returns(cost,final_amt):
+    if cost == 0:
+            return 0
+    return ((final_amt-cost)/cost)*100
 
 # Thanks to KT. for XIRR computation fns : https://stackoverflow.com/a/33260133
 def xnpv(rate, values, dates):
@@ -301,6 +361,7 @@ def xnpv(rate, values, dates):
         return float('inf')
     d0 = dates[0]    # or min(dates)
     return sum([ vi / (1.0 + rate)**((di - d0).days / 365.0) for vi, di in zip(values, dates)])
+
 # returns the xirr ratio, not %age
 def xirr(values, dates,days, cost_value, final_amt):
     '''Equivalent of Excel's XIRR function.
@@ -312,9 +373,7 @@ def xirr(values, dates,days, cost_value, final_amt):
     0.0100612...
     '''
     if days<365:
-        if cost_value == 0:
-            return 0
-        return ((final_amt-cost_value)/cost_value)
+        return 0
 
     try:
         return scipy.optimize.newton(lambda r: xnpv(r, values, dates), 0.0)
