@@ -241,13 +241,17 @@ class WelcomeScreen():
         net_xirr = net_xirr*100
 
         total_returns = absolute_returns(total_invested,total_value)
-
+        total_returns = round(total_returns,2)
+        total_value = round(total_value,2)
+        net_xirr = round(net_xirr,2)
+        total_invested = round(total_invested,2)
+        closing_bal = round(closing_bal,2)
         summary_line = [
             "Total", "Summary",closing_date.strftime('%d-%B-%y'),closing_bal,
-            (total_value)/closing_bal,total_invested,total_value,net_xirr,
-            total_returns, total_age
+            round((total_value)/closing_bal,2),total_invested,total_value,
+            net_xirr,total_returns, total_age
         ]
-        print(summary_line)
+
         return summary_line
                
     def fmt_age_days_to_yrs(self, age_in_days: int)->float:
@@ -323,7 +327,7 @@ class WelcomeScreen():
 
             # Abs returns
             fund_returns = absolute_returns(cost_value,final_amt)
-            all_fund_returns.append(fund_returns)
+            all_fund_returns.append(round(fund_returns, 2))
     
         return xirrs,ages,all_fund_returns
 
