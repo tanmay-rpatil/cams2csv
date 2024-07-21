@@ -51,6 +51,7 @@ class WelcomeScreen():
                     "Total_cost_value",
                     "Market_value",
                     "Xirr",
+                    "Returns",
                     "Age"
                 ]
         }
@@ -159,7 +160,7 @@ class WelcomeScreen():
             self.rows_map[SUMMARY].append(
                 [
                     folio, fund, date, closing_units, nav,
-                    cost, market_val, 0.00, 0
+                    cost, market_val, 0.00, 0.00, 0
                 ]
             )
 
@@ -191,13 +192,15 @@ class WelcomeScreen():
             df.Total_cost_value = df.Total_cost_value.astype("float")
             df.Market_value = df.Market_value.astype("float")
             self.sumarry_df = df
-            # Compute XIRR
-            xirrs,ages = self.compute_fund_xirrs_ages()
+            # Compute returns and age
+            xirrs,ages,returns = self.compute_fund_xirrs_ages_returns()
             df['Xirr'] = xirrs
             df['Age'] = ages
+            df['Returns'] = returns
             # Overall summary
             summary = self.overll_summary()
             df.loc[len(df)] = summary
+            df['Age'] = df['Age'].apply(lambda x: self.fmt_age_days_to_yrs(x))
         else:
             sys.stderr.write("Unkown type: " + str(op_type))
         
@@ -237,13 +240,19 @@ class WelcomeScreen():
                         total_invested,total_value) 
         net_xirr = net_xirr*100
 
+        total_returns = absolute_returns(total_invested,total_value)
+
         summary_line = [
             "Total", "Summary",closing_date.strftime('%d-%B-%y'),closing_bal,
-            (total_value)/closing_bal,total_invested,total_value,net_xirr,total_age
+            (total_value)/closing_bal,total_invested,total_value,net_xirr,
+            total_returns, total_age
         ]
         print(summary_line)
         return summary_line
                
+    def fmt_age_days_to_yrs(self, age_in_days: int)->float:
+        return round((age_in_days/365.25),2)
+
 
     def clean_txt(self, x):
         x.replace(r",", "", regex=True, inplace=True)
@@ -272,10 +281,11 @@ class WelcomeScreen():
         else:
             return timedelta().days, datetime.time(0)
    
-    def compute_fund_xirrs_ages(self):
+    def compute_fund_xirrs_ages_returns(self):
         count = 0
         xirrs = []
         ages = []
+        all_fund_returns = []
         for (fund,folio)in zip(self.sumarry_df.Fund_name,
                                 self.sumarry_df.Folio):
             fund_txns = self.txn_df.loc[
@@ -296,9 +306,9 @@ class WelcomeScreen():
                                 dayfirst=True).tolist()
             dates.append(final_date)
             # Add to the txns, the current market val
-            final_amt = fund_summ["Market_value"].tolist()
+            final_amt = (fund_summ["Market_value"].tolist())[0]
             txns = fund_txns["Amount"].tolist()
-            txns.append(0-final_amt[0])
+            txns.append(0-final_amt)
             
             # Cost value to compute absolute gain
             cost_value = fund_summ["Total_cost_value"].tolist()[0]
@@ -307,11 +317,15 @@ class WelcomeScreen():
             self.sumarry_df.at[count,"Date"] = closing_date.strftime('%d-%b-%Y')
             print(fund_summ["Date"][count], closing_date.strftime('%d-%b-%Y'))
             ages.append(age)
-            xirr_val = xirr(txns,dates,age,cost_value,final_amt[0])
+            xirr_val = xirr(txns,dates,age,cost_value,final_amt)
             xirrs.append(round(xirr_val*100, 2))
             count += 1
+
+            # Abs returns
+            fund_returns = absolute_returns(cost_value,final_amt)
+            all_fund_returns.append(fund_returns)
     
-        return xirrs,ages
+        return xirrs,ages,all_fund_returns
 
 
 def parse_args():
@@ -322,6 +336,12 @@ def parse_args():
     parser.add_argument( '-p', '--password', default="",
                         help="Password of the input PDF file")
     return parser.parse_args()
+
+# Absolute returns 
+def absolute_returns(cost,final_amt):
+    if cost == 0:
+            return 0
+    return ((final_amt-cost)/cost)*100
 
 # Thanks to KT. for XIRR computation fns : https://stackoverflow.com/a/33260133
 def xnpv(rate, values, dates):
@@ -337,6 +357,7 @@ def xnpv(rate, values, dates):
         return float('inf')
     d0 = dates[0]    # or min(dates)
     return sum([ vi / (1.0 + rate)**((di - d0).days / 365.0) for vi, di in zip(values, dates)])
+
 # returns the xirr ratio, not %age
 def xirr(values, dates,days, cost_value, final_amt):
     '''Equivalent of Excel's XIRR function.
@@ -348,9 +369,7 @@ def xirr(values, dates,days, cost_value, final_amt):
     0.0100612...
     '''
     if days<365:
-        if cost_value == 0:
-            return 0
-        return ((final_amt-cost_value)/cost_value)
+        return 0
 
     try:
         return scipy.optimize.newton(lambda r: xnpv(r, values, dates), 0.0)
