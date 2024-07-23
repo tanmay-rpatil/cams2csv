@@ -10,6 +10,7 @@ import scipy.optimize
 
 basedir = os.path.dirname(__file__)
 
+DATE_FMT = "%d-%b-%Y"
 ALL_TXN = "all-txn"
 SUMMARY = "summary"
 SUMMARY_REGEX = re.compile (
@@ -27,6 +28,7 @@ class WelcomeScreen():
     def __init__(self):
         # init cli 
         print("CAMS 2 CSV CLI version")
+        self.years = set()
         self.rows_map = {
             ALL_TXN : [],
             SUMMARY : [],
@@ -103,12 +105,8 @@ class WelcomeScreen():
                 # to description
                 description,amount = self.handle_idcw_reinvest_if_reqd(description,amount)
 
-                self.rows_map[ALL_TXN].append(
-                    [
-                        folio, fun_name, date, description, amount,
-                        units, price, unit_bal
-                    ]
-                )
+                self.write_txn_to_df(folio, fun_name, date, description, amount,
+                        units, price, unit_bal )
                 fund_txns += 1
                 total_txn += 1
             elif no_unit_txn:
@@ -117,23 +115,13 @@ class WelcomeScreen():
                 description = no_unit_txn.group(2)
                 amount = no_unit_txn.group(3)
                 if "Stamp Duty" in description:
-                    self.rows_map[ALL_TXN].append(
-                        [
-                            folio, fun_name, date, description, amount,
-                            '0', '0', '0'
-                        ]
-                    )
+                    self.write_txn_to_df(folio, fun_name, date, description, 
+                                         amount, '0', '0', '0')
                 elif ("IDCW" in description) and ("per unit" in description):
                     if '(' not in amount: 
                         amount = '('+amount+')'
-                    row = [
-                            folio, fun_name, date, description, amount,
-                            '0', '0', '0'
-                        ]
-                    print(row,"\n")
-                    self.rows_map[ALL_TXN].append(
-                        row
-                    )
+                    self.write_txn_to_df(folio, fun_name, date, description,
+                                          amount, '0', '0', '0')
 
             elif i.startswith("Closing"):
                 self.summerize_current_fund(fun_name,folio,i)
@@ -142,7 +130,20 @@ class WelcomeScreen():
         # xirr
 
         self.write_to_op_file(SUMMARY)  
+
+    def write_txn_to_df(self,folio, fun_name, date, description, amount, units, 
+                        price, unit_bal): 
     
+        self.rows_map[ALL_TXN].append(
+                    [
+                        folio, fun_name, date, description, amount,
+                        units, price, unit_bal
+                    ]
+                )
+        # Extract date
+        dt = datetime.strptime(date,DATE_FMT)
+        self.years.add(dt.year)
+
     def handle_idcw_reinvest_if_reqd(self,description,amt):
         if "IDCW Reinvested" in description:
             description += (" - RS: "+amt)
@@ -216,12 +217,14 @@ class WelcomeScreen():
     
     def overll_summary(self):
         self.txn_df["Date"] = to_datetime(self.txn_df["Date"],
-                                            format="%d-%b-%Y",
+                                            format=DATE_FMT,
                                             dayfirst=True)
+
         sorted_df = self.txn_df.sort_values(by="Date")
+
         # First txn date
         closing_dates = to_datetime(self.sumarry_df["Date"],
-                                            format="%d-%b-%Y",
+                                            format=DATE_FMT,
                                             dayfirst=True).tolist()
         closing_date = sorted(closing_dates)[-1]
         closing_bal = self.sumarry_df["Closing_unit_balance"].sum()
@@ -251,9 +254,26 @@ class WelcomeScreen():
             round((total_value)/closing_bal,2),total_invested,total_value,
             net_xirr,total_returns, total_age
         ]
-
+        
+        self.yearly_flows()
         return summary_line
                
+    def yearly_flows(self):
+        yrs = sorted(self.years)
+        
+        net = 0
+        for yr in yrs:
+            start_date = datetime(year=yr,month=1,day=1,hour=0,minute=0)
+            end_date = datetime(year=yr,month=12,day=31,hour=23,minute=59)
+            mask = (self.txn_df['Date'] > start_date) & (self.txn_df['Date'] <= end_date)
+            txns = self.txn_df.loc[mask]
+            flow = txns["Amount"].sum()
+            print(yr,flow,"\n")
+            net += flow
+        print("net is", net)
+
+            
+
     def fmt_age_days_to_yrs(self, age_in_days: int)->float:
         return round((age_in_days/365.25),2)
 
@@ -303,10 +323,10 @@ class WelcomeScreen():
             # For XIRR calcs, include the current date/val
             # Add to the txns, the current date
             #since this is a view on a df, we use count as the correct idx in the overal df
-            final_date = to_datetime(fund_summ["Date"], format="%d-%b-%Y",
+            final_date = to_datetime(fund_summ["Date"], format=DATE_FMT,
                                 dayfirst=True)[count] 
             dates = to_datetime(fund_txns["Date"],
-                                format="%d-%b-%Y",
+                                format=DATE_FMT,
                                 dayfirst=True).tolist()
             dates.append(final_date)
             # Add to the txns, the current market val
@@ -319,7 +339,7 @@ class WelcomeScreen():
             closing_bal = float(fund_summ["Closing_unit_balance"][count])
             age, closing_date = self.calculate_fund_age_days_and_closing_date(closing_bal,dates,txns)
             self.sumarry_df.at[count,"Date"] = closing_date.strftime('%d-%b-%Y')
-            print(fund_summ["Date"][count], closing_date.strftime('%d-%b-%Y'))
+
             ages.append(age)
             xirr_val = xirr(txns,dates,age,cost_value,final_amt)
             xirrs.append(round(xirr_val*100, 2))
